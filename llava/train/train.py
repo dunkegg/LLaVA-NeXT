@@ -1138,6 +1138,7 @@ class LazySupervisedDataset(Dataset):
         assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
 
         if "image" in sources[0]:
+            
             image_file = self.list_data_dict[i]["image"]
             if type(image_file) is list:
                 image = [self.process_image(f) for f in image_file]
@@ -1149,6 +1150,25 @@ class LazySupervisedDataset(Dataset):
             else:
                 image = [self.process_image(image_file)]
             sources = preprocess_multimodal(copy.deepcopy([e["conversations"] for e in sources]), self.data_args)
+
+        elif "current_obs_rgb" in sources[0] and "map_path" in sources[0]:
+            obs_list = self.list_data_dict[i]["current_obs_rgb"]
+            map_list = self.list_data_dict[i]["map_path"]
+            image_file = []
+            for i in range(len(obs_list)):
+                image_file.append(obs_list[i])
+                image_file.append(map_list[i])
+            if type(image_file) is list:
+                image = [self.process_image(f) for f in image_file]
+                # Handling multi images
+                # overwrite to process with simple pad 
+                if len(image_file) > 1:
+                    image = [self.process_image(f, "pad") for f in image_file]
+                    image = [[im[0], im[1], "image"] for im in image]
+            else:
+                image = [self.process_image(image_file)]
+            sources = preprocess_multimodal(copy.deepcopy([e["conversations"] for e in sources]), self.data_args)         
+            
 
         elif "video" in sources[0]:
             video_file = self.list_data_dict[i]["video"]
@@ -1208,7 +1228,7 @@ class LazySupervisedDataset(Dataset):
         else:
             sources = copy.deepcopy([e["conversations"] for e in sources])
 
-        has_image = ("image" in self.list_data_dict[i]) or ("video" in self.list_data_dict[i])
+        has_image = ("image" in self.list_data_dict[i]) or ("video" in self.list_data_dict[i]) or ("current_obs_rgb" in self.list_data_dict[i])
         data_dict = preprocess(sources, self.tokenizer, has_image=has_image)
 
         if "prompt" in data_dict:
@@ -1222,6 +1242,8 @@ class LazySupervisedDataset(Dataset):
         # image exist in the data
         if "image" in self.list_data_dict[i]:
             data_dict["image"] = image
+        elif "current_obs_rgb" in self.list_data_dict[i]:
+            data_dict["image"] = image    
         elif "video" in self.list_data_dict[i]:
             data_dict["image"] = image
         elif self.data_args.is_multimodal:

@@ -1,3 +1,8 @@
+model_zoo/
+model_output/
+data/
+
+
 # Python
 __pycache__
 *.pyc
