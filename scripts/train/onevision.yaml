@@ -1,17 +1,6 @@
 datasets:
-  - json_path: data/chunk_1.json
-  - json_path: data/chunk_2.json
-  - json_path: data/chunk_3.json
-  - json_path: data/chunk_4.json
-  - json_path: data/chunk_5.json
-  - json_path: data/chunk_6.json
-  - json_path: data/chunk_7.json
-  - json_path: data/chunk_8.json
-  - json_path: data/chunk_9.json
-  - json_path: data/chunk_10.json
-  - json_path: data/chunk_11.json
-  - json_path: data/chunk_12.json
-  - json_path: data/chunk_13.json
+  - json_path: data/goat_train_aug.json
+
 # datasets:
 #   - json_path: /mnt/bn/vl-research/data/llava_instruct/real_vision_flan/llava_next_fit_mix_filtered_text_wild_738590.json
 #     sampling_strategy: "first:50%"

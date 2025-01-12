@@ -27,14 +27,12 @@ def load_image(image_file):
         image = Image.open(image_path).convert('RGB')
     return image
 
-def load_json_data(json_file, id):
+def load_json_data(json_file):
     """Load a specific entry from a JSON file by ID."""
     with open(json_file, 'r') as f:
         data = json.load(f)
-    for entry in data:
-        if entry['id'] == id:
-            return entry
-    raise ValueError(f"No entry found with id {id}.")
+    return data
+
 
 
 def process_image(image, processor, config, overwrite_image_aspect_ratio=None):
@@ -90,6 +88,17 @@ def process_images_with_tokens(obs_paths, map_paths, image_processor, config):
     #return torch.cat(image_tensors, dim=0)
     return image
 
+import re
+def get_answer(output):
+    # 匹配 <...><...> 格式的字符串
+    match = re.match(r"<([^>]+)><([^>]+)>$", output)
+    if match:
+        reason = f"{match.group(1)}"  # 提取 <close>
+        direction = f"{match.group(2)}"  # 提取 <front>
+        return reason, direction
+    return None, None
+
+
 def main(args):
     # Initialize model
     disable_torch_init()
@@ -113,53 +122,109 @@ def main(args):
     else:
         args.conv_mode = conv_mode
 
-    conv = conv_templates[args.conv_mode].copy()
-    if "mpt" in model_name.lower():
-        roles = ("user", "assistant")
-    else:
-        roles = conv.roles
+
 
     # Load JSON data
-    data = load_json_data(args.json_file, args.id)
-    current_obs_rgb = data["current_obs_rgb"]
-    current_map_rgb = data["map_path"]
-    conversations = data["conversations"]
+    data = load_json_data(args.json_file)
+    total_count = 0
+    correct = 0
+    view_count = 0
+    locate_count = 0
+    view_correct = 0
+    locate_correct = 0
+    for item in data:
+        if item["id"]>args.id:
+            break
+        current_obs_rgb = item["current_obs_rgb"]
+        current_map_rgb = item["map_path"]
+        conversations = item["conversations"]
+        truth = item["conversations"][1]["value"]
+        # Process images
+        images = process_images_with_tokens(current_obs_rgb, current_map_rgb, image_processor, model.config)
+        image_tensor = [im[0].to(dtype=torch.bfloat16) for im in images]
 
-    # Process images
-    images = process_images_with_tokens(current_obs_rgb, current_map_rgb, image_processor, model.config)
-    image_tensor = [im[0].to(dtype=torch.bfloat16) for im in images]
+        # Build conversation
+        conv = conv_templates[args.conv_mode].copy()
+        if "mpt" in model_name.lower():
+            roles = ("user", "assistant")
+        else:
+            roles = conv.roles
+        
+        conv.append_message(conv.roles[0], conversations[0]["value"])
+        conv.append_message(conv.roles[1], None)
 
-    # Build conversation
-    conv.append_message(conv.roles[0], conversations[0]["value"])
-    conv.append_message(conv.roles[1], None)
+        # Generate prompt
+        prompt = conv.get_prompt()
+        #print("Generate prompt:", prompt)
+        # Tokenize prompt
+        input_ids = tokenizer_image_token(prompt, tokenizer, return_tensors='pt').unsqueeze(0).cuda()
+        #print(input_ids)
+        streamer = TextStreamer(tokenizer, skip_prompt=True)
+        stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
+        keywords = [stop_str]
+        stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
-    # Generate prompt
-    prompt = conv.get_prompt()
-    #print("Generate prompt:", prompt)
-    # Tokenize prompt
-    input_ids = tokenizer_image_token(prompt, tokenizer, return_tensors='pt').unsqueeze(0).cuda()
-    #print(input_ids)
-    streamer = TextStreamer(tokenizer, skip_prompt=True)
-    stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
-    keywords = [stop_str]
-    stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
+        # Run inference
+        # print("img size:", [single_image_tensor.shape for single_image_tensor in image_tensor])
+        with torch.inference_mode():
+            output_ids = model.generate(
+                input_ids,
+                images=image_tensor,
+                do_sample=True,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                max_new_tokens=args.max_new_tokens,
+                image_sizes=[(384, 384)] #[torch([384, 384])]
+            )
 
-    # Run inference
-    # print("img size:", [single_image_tensor.shape for single_image_tensor in image_tensor])
-    with torch.inference_mode():
-        output_ids = model.generate(
-            input_ids,
-            images=image_tensor,
-            do_sample=True,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            max_new_tokens=args.max_new_tokens,
-            image_sizes=[(384, 384)] #[torch([384, 384])]
-        )
+        # Decode output
+        outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+        # print(f"Model Output: f{outputs}. Truth: {truth}")
+        reason, answer = get_answer(outputs)
 
-    # Decode output
-    outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
-    print("Model Output:\n", outputs)
+        truth_reason, truth_answer = get_answer(truth)
+        id = item["id"]
+        print(f"Evaling: {id},  model: {outputs}/ {reason},{answer}, truth: {truth_reason},{truth_answer}  ")
+        
+        if "origin" in args.result_name:
+            if reason:
+                total_count += 1
+                if item["viewed"] == 1:
+                    view_count += 1
+                if item["located"] == 1:
+                    locate_count += 1           
+        else:
+            total_count += 1
+            if item["viewed"] == 1:
+                view_count += 1
+            if item["located"] == 1:
+                locate_count += 1        
+        if answer == truth_answer:
+            correct += 1
+            if item["viewed"] == 1 and reason == truth_reason:
+                view_correct += 1
+            if item["located"] == 1 and reason == truth_reason:
+                locate_correct += 1                
+        
+    correct_rate = correct/total_count if total_count>0 else 0
+    viewed_correct_rate = view_correct/view_count if view_count>0 else 0
+    located_correct_rate = locate_correct/locate_count if locate_count>0 else 0
+    # 文件路径
+    output_file = f"/data2/zejinw/ON-MLLM/LLaVA-NeXT-wzj/data/result/{args.result_name}.txt"
+
+    # 写入 TXT 文件
+    with open(output_file, "w") as f:
+        f.write(f"Total Count: {total_count}\n")
+        f.write(f"Correct: {correct}\n")
+        f.write(f"View Count: {view_count}\n")
+        f.write(f"Locate Count: {locate_count}\n")
+        f.write(f"View Correct: {view_correct}\n")
+        f.write(f"Locate Correct: {locate_correct}\n")
+        
+        f.write(f"Correct Rate: {correct_rate}\n")
+        f.write(f"View Correct Rate: {viewed_correct_rate}\n")
+        f.write(f"Locate Correct Rate: {located_correct_rate}\n")
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -174,5 +239,6 @@ if __name__ == "__main__":
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
     parser.add_argument("--torch-type", type=str, default="bfloat16")
+    parser.add_argument("--result_name", type=str, default="no_name")
     args = parser.parse_args()
     main(args)
