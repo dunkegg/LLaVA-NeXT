@@ -15,6 +15,8 @@ from PIL import Image
 from io import BytesIO
 import requests
 
+direction_dict = {"front":0, "left":1,"back":2,"right":3}
+
 def load_image(image_file):
     """Load an image from a file or URL."""
     if image_file.startswith('http') or image_file.startswith('https'):
@@ -88,16 +90,29 @@ def process_images_with_tokens(obs_paths, map_paths, image_processor, config):
     #return torch.cat(image_tensors, dim=0)
     return image
 
-import re
-def get_answer(output):
-    # 匹配 <...><...> 格式的字符串
-    match = re.match(r"<([^>]+)><([^>]+)>$", output)
-    if match:
-        reason = f"{match.group(1)}"  # 提取 <close>
-        direction = f"{match.group(2)}"  # 提取 <front>
-        return reason, direction
-    return None, None
 
+
+import re
+# def get_answer(output):
+#     # 匹配 <...><...> 格式的字符串
+#     match = re.match(r"<([^>]+)><([^>]+)>$", output)
+#     if match:
+#         reason = f"{match.group(1)}"  # 提取 <close>
+#         direction = f"{match.group(2)}"  # 提取 <front>
+#         return reason, direction
+#     return None, None
+
+def get_answer(output):
+    match = re.search(r"<(\w+)><(\w+)>", output)
+
+    if match:
+        first_word = match.group(1)  # Captures the first word (back)
+        second_word = match.group(2)  # Captures the second word (unseen)
+        return first_word, second_word
+    else:
+        return None, None
+        
+    
 
 def main(args):
     # Initialize model
@@ -132,6 +147,11 @@ def main(args):
     locate_count = 0
     view_correct = 0
     locate_correct = 0
+    unseen_count = 0
+    unseen_correct = 0
+    walkable_count = 0
+    walkable_correct = 0
+    collision_count = 0
     for item in data:
         if item["id"]>args.id:
             break
@@ -180,9 +200,9 @@ def main(args):
         # Decode output
         outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
         # print(f"Model Output: f{outputs}. Truth: {truth}")
-        reason, answer = get_answer(outputs)
+        answer,reason  = get_answer(outputs)
 
-        truth_reason, truth_answer = get_answer(truth)
+        truth_answer, truth_reason = get_answer(truth)
         id = item["id"]
         print(f"Evaling: {id},  model: {outputs}/ {reason},{answer}, truth: {truth_reason},{truth_answer}  ")
         
@@ -198,17 +218,32 @@ def main(args):
             if item["viewed"] == 1:
                 view_count += 1
             if item["located"] == 1:
-                locate_count += 1        
+                locate_count += 1
+            if truth_reason == "unseen":
+                unseen_count +=1
+            elif truth_reason == "walkable":
+                walkable_count += 1
         if answer == truth_answer:
             correct += 1
             if item["viewed"] == 1 and reason == truth_reason:
                 view_correct += 1
             if item["located"] == 1 and reason == truth_reason:
                 locate_correct += 1                
+            if truth_reason == "unseen" and reason == truth_reason:
+                unseen_correct +=1
+            elif truth_reason == "walkable" and reason == truth_reason:
+                walkable_correct += 1
+        else:
+            if item["cur_union_list"][direction_dict[answer]] < 70:
+                collision_count +=1
         
     correct_rate = correct/total_count if total_count>0 else 0
     viewed_correct_rate = view_correct/view_count if view_count>0 else 0
     located_correct_rate = locate_correct/locate_count if locate_count>0 else 0
+    
+    unseen_correct_rate = unseen_correct/unseen_count if unseen_count>0 else 0
+    walkable_correct_rate = walkable_correct/walkable_count if walkable_count>0 else 0
+    collision_rate = collision_count/(total_count - correct) if (total_count - correct)>0 else 0
     # 文件路径
     output_file = f"/data2/zejinw/ON-MLLM/LLaVA-NeXT-wzj/data/result/{args.result_name}.txt"
 
@@ -224,6 +259,13 @@ def main(args):
         f.write(f"Correct Rate: {correct_rate}\n")
         f.write(f"View Correct Rate: {viewed_correct_rate}\n")
         f.write(f"Locate Correct Rate: {located_correct_rate}\n")
+        
+        f.write(f"unseen Count: {unseen_count}\n")
+        f.write(f"walkable Count: {walkable_count}\n")
+        f.write(f"unseen Rate: {unseen_correct_rate}\n")
+        f.write(f"walkable Correct Rate: {walkable_correct_rate}\n")
+        f.write(f"Collision Rate: {collision_rate}\n")
+        
     
 
 if __name__ == "__main__":

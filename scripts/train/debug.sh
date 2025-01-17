@@ -4,12 +4,12 @@
 # export NCCL_SOCKET_IFNAME=eth0
 # export NCCL_DEBUG=INFO
 
-export NUM_GPUS=6
+export NUM_GPUS=7
 export NNODES=1
 export RANK=0
 export ADDR="localhost"
 export PORT=29555
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5
+export CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7
 
 LLM_VERSION="Qwen/Qwen2-7B-Instruct" 
 # for 7b model we recommend bs=1, accum=2, 16 nodes, 128 gpus, lr=1e-5, warmup=0.03
@@ -53,9 +53,9 @@ ACCELERATE_CPU_AFFINITY=1 torchrun --nproc_per_node="${NUM_GPUS}" --nnodes="${NN
     --mm_patch_merge_type spatial_unpad \
     --bf16 True \
     --run_name $RUN_NAME \
-    --output_dir ./model_output/llava-next-interleave-qwen-7b-aug \
-    --num_train_epochs 1 \
-    --per_device_train_batch_size 1 \
+    --output_dir ./model_output/llava-next-interleave-qwen-7b-aug-reason2 \
+    --num_train_epochs 3 \
+    --per_device_train_batch_size 2 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 2 \
     --evaluation_strategy "no" \
